@@ -54,5 +54,5 @@ if(NOT has_thread_support)
 message(FATAL_ERROR C11 thread support library required)
 endif()
 
-add_executable(test_mumule test_mumule.c)
-target_link_libraries(test_mumule ${CMAKE_THREAD_LIBS_INIT})
+add_executable(test_mule test_mule.c)
+target_link_libraries(test_mule ${CMAKE_THREAD_LIBS_INIT})

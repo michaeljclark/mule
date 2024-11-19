@@ -1,4 +1,4 @@
-# mumule
+# mule
 
 > simple thread pool implementation using the C11 thread support library.
 
@@ -9,11 +9,11 @@
  - `mule_sync(mule)` to quench the queue
  - `mule_reset(mule)` to clear counters
 
-![mumule](diagram.svg)
+![mule](diagram.svg)
 
-_mumule_ is a simple thread worker pool that dispatches one dimension of work
+_mule_ is a simple thread worker pool that dispatches one dimension of work
 indices to a kernel function, either in batch or incrementally with multiple
-submissions, to be run by a pool of threads. _mumule_ uses three counters:
+submissions, to be run by a pool of threads. _mule_ uses three counters:
 `queued`, `processing`, and `processed`. Kernel execution is ordered with
 respect to the counters. It is up to the caller to provide array storage for
 input and output.
@@ -32,10 +32,10 @@ input and output.
 
 ## lock-free atomics and "the lost wakeup problem"
 
-_mumule_ attempts to be lock-free in the common case, that is the main thread
+_mule_ attempts to be lock-free in the common case, that is the main thread
 can submit work without taking a mutex and the worker threads can accept new
 work without taking a mutex, with the design goal that expensive locking and
-unlocking of the mutex after each work-item can be avoided. _mumule_ achieves
+unlocking of the mutex after each work-item can be avoided. _mule_ achieves
 this by using lock-free atomic operations on counters using primitives from
 `<stdatomic.h>`.
 
@@ -51,7 +51,7 @@ microseconds between each work item.
 
 ### queue-complete edge condition
 
-A "lost wakeup" can occur in _mumule_ while attempting to `cnd_signal` the
+A "lost wakeup" can occur in _mule_ while attempting to `cnd_signal` the
 _queue-complete_ edge condition in the worker processing the last item to
 the dispatcher within `cnd_wait` in `mule_sync`. The code tries to do this
 precisely but the problem occurs between checking the _queue-complete_
@@ -62,7 +62,7 @@ thereby causing a deadlock if timeouts were not used.
 This design flaw in POSIX/C condition variables is remedied by _"futexes"_
 which can recheck the condition in the kernel while interrupts are disabled
 and atomically sleep if the condition still holds, but _"futexes"_ are not
-portable to other operating systems. _mumule_ instead tries to make the race
+portable to other operating systems. _mule_ instead tries to make the race
 condition as narrow as possible, immediately waiting after checking the
 condition and using `cnd_timedwait` so that if a wakeup is missed, the
 dispatcher thread will retry in a loop testing the condition again after 1ms.
@@ -88,15 +88,15 @@ and `mule_sync`:
         }
 ```
 
-## mumule interface
+## mule interface
 
-These definitions give a summary of the _mumule_ data structure:
+These definitions give a summary of the _mule_ data structure:
 
 ```
-typedef void(*mumule_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
+typedef void(*mu_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
 
 enum {
-    mumule_max_threads = 8,
+    mule_max_threads = 8,
 
     /*
      * condition revalidation timeouts - time between revalidation of the
@@ -105,24 +105,24 @@ enum {
      * dispatching thread has a shorter timeout in mule_sync. timeouts are
      * only necessary if thread is pre-empted before calling cnd_timedwait.
      */
-    mumule_revalidate_work_available_ns = 10000000, /* 10 milliseconds */
-    mumule_revalidate_queue_complete_ns = 1000000,  /* 1 millisecond */
+    mule_revalidate_work_available_ns = 10000000, /* 10 milliseconds */
+    mule_revalidate_queue_complete_ns = 1000000,  /* 1 millisecond */
 };
 
-struct mu_thread { mu_mule *mule; size_t idx; thrd_t thread; };
+struct mu_thread { mu_pool *mule; size_t idx; thrd_t thread; };
 
-struct mu_mule
+struct mu_pool
 {
     mtx_t            mutex;
     cnd_t            wake_dispatcher;
     cnd_t            wake_worker;
     void*            userdata;
-    mumule_work_fn   kernel;
+    mu_work_fn       kernel;
     size_t           num_threads;
     _Atomic(size_t)  running;
     _Atomic(size_t)  threads_running;
 
-    mu_thread        threads[mumule_max_threads];
+    mu_thread        threads[mule_max_threads];
 
     ALIGNED(64) _Atomic(size_t)  queued;
     ALIGNED(64) _Atomic(size_t)  processing;
@@ -130,45 +130,45 @@ struct mu_mule
 };
 ```
 
-### mumule api
+### mule api
 
-The following is a brief description of the _mumule_ api:
+The following is a brief description of the _mule_ api:
 
-#### `void mule_init(mu_mule *, size_t nthreads, work_fn kernel, void *userdata);`
+#### `void mule_init(mu_pool *, size_t nthreads, work_fn kernel, void *userdata);`
 
-Initialize mu_mule, set number of threads, kernel function and userdata pointer.
+Initialize mu_pool, set number of threads, kernel function and userdata pointer.
 the `kernel` function takes three arguments: `void *userdata` — pointer passed
 to `mule_init`, `size_t thr_idx` — the thread index _(0 ... nthreads)_
 and `item_idx` — the workitem index _(0 ... nqueued)_ which is added to with
 the `count` argument of `mule_submit`.
 
 ```
-    typedef void(*mumule_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
+    typedef void(*mu_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
 ```
 
-#### `int mule_start(mu_mule *);`
+#### `int mule_start(mu_pool *);`
 
 Start threads and process workitems. `mule_start` can be called either before
 or after `mule_submit`.
 
-#### `size_t mule_submit(mu_mule *, size_t count);`
+#### `size_t mule_submit(mu_pool *, size_t count);`
 
 Add `count` to the queued limit of workitems. successive calls to `mule_submit`
 will atomically add to `count` and notify worker threads that there is work.
 
-#### `int mule_sync(mu_mule *);`
+#### `int mule_sync(mu_pool *);`
 
 Wait for worker threads to complete all outstanding workitems in the queue.
 
-#### `int mule_reset(mu_mule *);`
+#### `int mule_reset(mu_pool *);`
 
 Synchronizes on the queue then resets all counters to zero.
 
-#### `int mule_stop(mu_mule *);`
+#### `int mule_stop(mu_pool *);`
 
 Shuts down threads. the user can start them again with `mule_start`.
 
-#### `int mule_destroy(mu_mule *);`
+#### `int mule_destroy(mu_pool *);`
 
 Shuts down threads then frees resources _(mutexes and condition variables)_.
 
@@ -180,7 +180,7 @@ The following example launches two threads with eight workitems.
 ```
 #include <assert.h>
 #include <stdatomic.h>
-#include "mumule.h"
+#include "mule.h"
 
 _Atomic(size_t) counter = 0;
 
@@ -191,7 +191,7 @@ void work(void *arg, size_t thr_idx, size_t item_idx)
 
 int main(int argc, const char **argv)
 {
-    mu_mule mule;
+    mu_pool mule;
 
     mule_init(&mule, 2, work, NULL);
     mule_submit(&mule, 8);
@@ -213,7 +213,7 @@ cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -B build -G Ninja
 cmake --build build -- --verbose
 ```
 
-Run with `build/test_mumule -v` to enable verbose debug messages:
+Run with `build/test_mule -v` to enable verbose debug messages:
 
 ```
 mule_submit: queue-start
@@ -237,4 +237,4 @@ mule_thread-0: worker-exiting
 
 ## license
 
-_mumule_ source code is released under an ISC License.
+_mule_ source code is released under an ISC License.

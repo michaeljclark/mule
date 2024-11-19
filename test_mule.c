@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdatomic.h>
-#include "mumule.h"
+#include "mule.h"
 
 int debug = 0;
 _Atomic(size_t) counter = 0;
@@ -15,7 +15,7 @@ void w1(void *arg, size_t thr_idx, size_t item_idx)
 
 void t1()
 {
-	mu_mule mule;
+	mu_pool mule;
 	mule_init(&mule, 2, w1, NULL);
 	mule_submit(&mule, 8);
 	mule_start(&mule);
@@ -28,9 +28,9 @@ void t1()
 int main(int argc, const char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "-v") == 0) {
-        mu_set_debug(1);
+        mule_debug(1);
     } else if (argc == 2 && strcmp(argv[1], "-vv") == 0) {
-        mu_set_debug(2);
+        mule_debug(2);
     }
 
 	t1();

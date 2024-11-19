@@ -25,8 +25,6 @@
 #include <time.h>
 #include <assert.h>
 
-#include "mulog.h"
-
 #if defined(_MSC_VER)
 #define ALIGNED(x) __declspec(align(x))
 #elif defined(__GNUC__)
@@ -41,8 +39,8 @@ extern "C" {
 
 typedef long long llong;
 
-struct mu_mule;
-typedef struct mu_mule mu_mule;
+struct mu_pool;
+typedef struct mu_pool mu_pool;
 struct mu_thread;
 typedef struct mu_thread mu_thread;
 
@@ -59,7 +57,7 @@ typedef struct mu_thread mu_thread;
  * mumule example program:
  *
  * {
- *     mu_mule mule;
+ *     mu_pool mule;
  *
  *     mule_init(&mule, 2, w1, NULL);
  *     mule_submit(&mule, 8);
@@ -71,15 +69,15 @@ typedef struct mu_thread mu_thread;
  *
  */
 
-typedef void(*mumule_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
+typedef void(*mu_work_fn)(void *arg, size_t thr_idx, size_t item_idx);
 
-static void mule_init(mu_mule *mule, size_t num_threads, mumule_work_fn kernel, void *userdata);
-static size_t mule_submit(mu_mule *mule, size_t count);
-static int mule_start(mu_mule *mule);
-static int mule_sync(mu_mule *mule);
-static int mule_reset(mu_mule *mule);
-static int mule_stop(mu_mule *mule);
-static int mule_destroy(mu_mule *mule);
+static void mule_init(mu_pool *mule, size_t num_threads, mu_work_fn kernel, void *userdata);
+static size_t mule_submit(mu_pool *mule, size_t count);
+static int mule_start(mu_pool *mule);
+static int mule_sync(mu_pool *mule);
+static int mule_reset(mu_pool *mule);
+static int mule_stop(mu_pool *mule);
+static int mule_destroy(mu_pool *mule);
 
 enum {
     mumule_max_threads = 8,
@@ -95,15 +93,15 @@ enum {
     mumule_revalidate_queue_complete_ns = 1000000,  /* 1 millisecond */
 };
 
-struct mu_thread { mu_mule *mule; size_t idx; thrd_t thread; };
+struct mu_thread { mu_pool *mule; size_t idx; thrd_t thread; };
 
-struct mu_mule
+struct mu_pool
 {
     mtx_t            mutex;
     cnd_t            wake_dispatcher;
     cnd_t            wake_worker;
     void*            userdata;
-    mumule_work_fn   kernel;
+    mu_work_fn       kernel;
     size_t           num_threads;
     _Atomic(size_t)  running;
     _Atomic(size_t)  threads_running;
@@ -118,6 +116,13 @@ struct mu_mule
 /*
  * mumule implementation
  */
+
+extern int debug;
+
+static void mule_debug(int level) { debug = level; }
+static void log_printf(const char* fmt, ...);
+#define debugf(...) if(debug > 0) printf(__VA_ARGS__)
+#define tracef(...) if(debug > 1) printf(__VA_ARGS__)
 
 static inline struct timespec _timespec_add(struct timespec abstime, llong reltime)
 {
@@ -137,9 +142,9 @@ static inline const char* _timespec_string(char *buf, size_t buf_size, struct ti
     return buf;
 }
 
-static void mule_init(mu_mule *mule, size_t num_threads, mumule_work_fn kernel, void *userdata)
+static void mule_init(mu_pool *mule, size_t num_threads, mu_work_fn kernel, void *userdata)
 {
-    memset(mule, 0, sizeof(mu_mule));
+    memset(mule, 0, sizeof(mu_pool));
     mule->userdata = userdata;
     mule->kernel = kernel;
     mule->num_threads = num_threads;
@@ -151,7 +156,7 @@ static void mule_init(mu_mule *mule, size_t num_threads, mumule_work_fn kernel, 
 static int mule_thread(void *arg)
 {
     mu_thread *thread = (mu_thread*)arg;
-    mu_mule *mule = thread->mule;
+    mu_pool *mule = thread->mule;
     void* userdata = mule->userdata;
     const size_t thread_idx = thread->idx;
     size_t queued, processing, processed, workitem_idx;
@@ -233,7 +238,7 @@ static int mule_thread(void *arg)
     return 0;
 }
 
-static size_t mule_submit(mu_mule *mule, size_t count)
+static size_t mule_submit(mu_pool *mule, size_t count)
 {
     debugf("mule_submit: queue-start\n");
     size_t idx = atomic_fetch_add_explicit(&mule->queued, count, __ATOMIC_SEQ_CST);
@@ -241,7 +246,7 @@ static size_t mule_submit(mu_mule *mule, size_t count)
     return idx + count;
 }
 
-static int mule_start(mu_mule *mule)
+static int mule_start(mu_pool *mule)
 {
     mtx_lock(&mule->mutex);
     if (atomic_load(&mule->running)) {
@@ -264,7 +269,7 @@ static int mule_start(mu_mule *mule)
     return 0;
 }
 
-static int mule_sync(mu_mule *mule)
+static int mule_sync(mu_pool *mule)
 {
     size_t queued, processed;
     char tstr[32];
@@ -308,7 +313,7 @@ static int mule_sync(mu_mule *mule)
     return 0;
 }
 
-static int mule_reset(mu_mule *mule)
+static int mule_reset(mu_pool *mule)
 {
     mule_sync(mule);
 
@@ -321,7 +326,7 @@ static int mule_reset(mu_mule *mule)
     return 0;
 }
 
-static int mule_stop(mu_mule *mule)
+static int mule_stop(mu_pool *mule)
 {
     mtx_lock(&mule->mutex);
     if (!atomic_load(&mule->running)) {
@@ -345,7 +350,7 @@ static int mule_stop(mu_mule *mule)
     return 0;
 }
 
-static int mule_destroy(mu_mule *mule)
+static int mule_destroy(mu_pool *mule)
 {
     mule_stop(mule);
 
